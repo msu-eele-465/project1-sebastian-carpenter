@@ -25,6 +25,8 @@
 RESET       mov.w   #__STACK_END,SP         ; Initialize stack pointer
 StopWDT     mov.w   #WDTPW+WDTHOLD,&WDTCTL  ; Stop WDT
 
+
+
 ;-------------------------------------------------------------------------------
 ; init START
 ;-------------------------------------------------------------------------------
@@ -38,11 +40,45 @@ init:
         bis.b   #BIT0, &P1DIR       ; set as output
         bic.b   #BIT0, &P1OUT       ; clear output
 
+        ; setup P6.6 for Poll LED
+        bic.b   #BIT6, &P6SEL0      ; digital I/O
+        bic.b   #BIT6, &P6SEL1      ; digital I/O
+
+        bis.b   #BIT6, &P6DIR       ; set as output
+        bic.b   #BIT6, &P6OUT       ; clear output
+
+
+; --- timer ---
+		; divider value: 1 s = 1 / 1000000 * D * 2^16 => 1000000 / 2^16 = D => D = 15.258, choose 20 for adjustment
+		; capture value: 1000000 / 20 = N => N = 50000 < 2^16
+
+		; setup timer TB0
+		bis.w	#TBCLR, &TB0CTL			; clear timer
+		bis.w	#TBSSEL__SMCLK, &TB0CTL	; select small clock (1 MHz)
+		bis.w	#MC__UP, &TB0CTL		; compare mode
+		bis.w	#CNTL_0, &TB0CTL		; 16-bit length
+		bis.w	#ID_2, &TB0CTL			; div-by-4 in first divider
+		bis.w	#TBIDEX_4, &TB0EX0		; div-by-5 in expansion
+
+		; 50000d is the calculated value, adjusted +2600d (.050 ms)
+		mov.w	#52600d, &TB0CCR0		; set capture-compare value
+
+; --- interrupts ---
+		; timer TB0
+		bic.w	#CCIFG, &TB0CCTL0		; clear interrupt flag
+		bis.w	#CCIE, &TB0CCTL0		; enable capture/compare IRQ
+
 ; --- turn off low impedance ---
 
         bic.b	#LOCKLPM5, &PM5CTL0
 
+; --- enable global interrupts ---
+
+		bis.w	#GIE, SR
+
 ;----------------------------------- init END ----------------------------------
+
+
 
 ;-------------------------------------------------------------------------------
 ; main START
@@ -54,6 +90,12 @@ main:
         jmp     main                ; infinite loop
 
 ;----------------------------------- main END ----------------------------------
+
+
+
+;-------------------------------------------------------------------------------
+; Subroutines
+;-------------------------------------------------------------------------------
 
 ;-------------------------------------------------------------------------------
 ; flash SUBROUTINE
@@ -88,11 +130,37 @@ delay_1s_inner:
         jnz     delay_1s_outer      ; repeat outer loop for ~1s
 
         ret
+
 ;---------------------------------- delay_1s END ------------------------------
 
+
+
 ;------------------------------------------------------------------------------
-;           Interrupt Vectors
+; Interrupt Service Routines
+;------------------------------------------------------------------------------
+
+;------------------------------------------------------------------------------
+; TB0_interrupt_led_ISR ISR
+;------------------------------------------------------------------------------
+
+; toggle the Interrupt LED, P6.6, every second
+TB0_interrupt_led_ISR:
+		xor.b	#BIT6, &P6OUT;		; toggle Interrupt LED, P6.6
+
+		bic.w	#CCIFG, &TB0CCTL0	; clear interrupt flag
+		reti;
+
+;--------------------------TB0_interrupt_led_ISR END --------------------------
+
+
+
+;------------------------------------------------------------------------------
+; Interrupt Vectors
 ;------------------------------------------------------------------------------
             .sect   RESET_VECTOR            ; MSP430 RESET Vector
             .short  RESET                   ;
+
+            .sect	".int43"				; TB0CCR0
+            .short	TB0_interrupt_led_ISR
+
             .end
